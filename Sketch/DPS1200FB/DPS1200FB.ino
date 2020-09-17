@@ -12,9 +12,16 @@
  *       ----------
  * 
  * AVRDude
+ * ATTINY85
  * avrdude -c usbtiny -P usb -p attiny85
  * avrdude -c usbtiny -P usb -p attiny85 -e -U lfuse:w:0xE2:m -U hfuse:w:0xDF:m -U efuse:w:0xFF:m -U lock:w:0xFF:m
  * avrdude -c usbtiny -P usb -p attiny85 -e -U flash:w:firmware.hex:a
+ * 
+ * ATTINY45
+ * avrdude -c usbtiny -P usb -p attiny45
+ * avrdude -c usbtiny -P usb -p attiny45 -e -U lfuse:w:0xE2:m -U hfuse:w:0xDF:m -U efuse:w:0xFF:m -U lock:w:0xFF:m
+ * avrdude -c usbtiny -P usb -p attiny45 -e -U flash:w:firmware.hex:a
+ * 
  * Fuses
  * Internal RC OSC to 8M, do not divide to keep at 8M
  * http://eleccelerator.com/fusecalc/fusecalc.php?chip=attiny85&LOW=E2&HIGH=DF&EXTENDED=FF&LOCKBIT=FF
@@ -52,12 +59,11 @@
 
 /* Address of PIC MCU in PSU (0x57 -> EEPROM, 0x5F -> PIC MCU) - DOESN'T ACCOUNT FOR ADDRESS SELECT PINS */
 #define I2CADDR 0x5F 
-#define STATIC_RPM 8000
 
 /* Analog Control - adjust PSU RPM Fan via Analog input - uses map function */
-#define AIN_PIN   A3  // Works for both ATTINY85 and Pro Micro
-#define LED_PIN 1     // Pin for blink code LED
-#define ACTRL_PIN  2  // Works for both ATTINY85 and Pro Micro
+#define AIN_PIN   A3
+#define LED_PIN    1
+#define ACTRL_PIN A2
 
 /* Map values for analog control */
 #define MAP_INIT_LOW 0 
@@ -69,6 +75,19 @@
 #define LOOP_DELAY 1000
 #define BLINK_TIME 100
 
+// RPM vals
+uint8_t  rpm_mode = HIGH;
+#define RPM_MODE_STATIC LOW    // Jumper installed, pulled low
+#define RPM_MODE_VARIABLE HIGH // Jumper removed, pulled high (internal pullup)
+#define STATIC_RPM 8000
+
+ // alias for heartbeat
+#define HEARTBEAT blinkCode(1)
+
+// Enable / Disable defines
+#define ENBLINKCODES // LED Blink codes
+#define ENI2C        // I2C
+
 // vals for i2c write
 uint8_t  reg = 0x40;
 uint8_t  valLSB = 0;
@@ -77,9 +96,7 @@ uint16_t rpm_value = STATIC_RPM;  // rpm
 uint16_t cs = 0;
 uint8_t  regCS = 0;
 uint8_t  data[4] = {0,0,0,0};
-uint8_t  analog_ctrl_state = HIGH;
 
-#define ENBLINKCODES // Enable / disable led blink codes.
 
 void blinkCode(uint8_t ct){
   #ifdef ENBLINKCODES
@@ -90,35 +107,35 @@ void blinkCode(uint8_t ct){
     delay(BLINK_TIME);
   }
   // end blink timeout
-  delay(LOOP_DELAY);
   #endif
+  delay(LOOP_DELAY); // Still want delay if blink codes disabled
 }
 
 void setup() {
-  pinMode(LED_PIN, OUTPUT);          // LED Pin as output for blink codes
-  digitalWrite(LED_PIN, LOW);        // Initial state of LED is off
-  pinMode(AIN_PIN, INPUT);           // Analog input pin for potentiometer 
-  pinMode(ACTRL_PIN, INPUT_PULLUP);  // Control Pin -> Jumper on for static RPM, Jumper off for potentiometer ctrl
+  pinMode(LED_PIN, OUTPUT);    // LED Pin as output for blink codes
+  digitalWrite(LED_PIN, LOW);  // Initial state of LED is off
+  pinMode(AIN_PIN, INPUT);     // Analog input pin for potentiometer 
+
+  // RPM Mode selection.  Use ACTRL_PIN to determine what mode - Static RPM (Jumper installed, LOW) - Variable POT - (Jumper removed, HIGH) + POT
+  pinMode(ACTRL_PIN, INPUT);
+  delay(500);
+  // read control state - only allow control state change on reboot
+  rpm_mode = digitalRead(ACTRL_PIN);
 
   // Start I2C
+  #ifdef ENI2C
   TinyWireM.begin();
-
-  // read control state
-  analog_ctrl_state = digitalRead(ACTRL_PIN);
+  #endif
 }
 
 void loop() {
-  blinkCode(1);
+  // inherit loop delay via heartbeat
+  HEARTBEAT; // heartbeat
 
-  // re-read control state
-  analog_ctrl_state = digitalRead(ACTRL_PIN);
-  
-  if(analog_ctrl_state == HIGH) {
-    // Jumper not installed
-    // read analog value and map to RPM
-    rpm_value = map((uint16_t)analogRead(AIN_PIN), MAP_INIT_LOW, MAP_INIT_HIGH, MAP_END_LOW, MAP_END_HIGH);
-  } else { // LOW
-    // Jumper installed
+  // Set RPM Value
+  if(rpm_mode == RPM_MODE_VARIABLE) {
+    rpm_value = map(analogRead(AIN_PIN), MAP_INIT_LOW, MAP_INIT_HIGH, MAP_END_LOW, MAP_END_HIGH);
+  } else if (rpm_mode == RPM_MODE_STATIC) {
     rpm_value = STATIC_RPM;
   } 
   
@@ -139,13 +156,12 @@ void loop() {
   data[3] = regCS;
 
   // write to psu
-  blinkCode(2);
+  //blinkCode(2);
   // I2C Transaction
+  #ifdef ENI2C
   TinyWireM.beginTransmission(I2CADDR);
   TinyWireM.write(data,4);
   TinyWireM.endTransmission();
-  blinkCode(3);
-  
-  // basic loop delay - resend i2c message every LOOP_DELAY ms (ignoring time for blinks)
-  delay(LOOP_DELAY);
+  #endif
+  //blinkCode(3);
 }
